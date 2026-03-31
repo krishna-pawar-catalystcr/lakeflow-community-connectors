@@ -178,61 +178,67 @@ class AbsorbLakeflowConnect(LakeflowConnect):
     def _read_enrollments(
         self, table_name: str, start_offset: dict, table_options: dict[str, str]
     ) -> tuple[Iterator[dict], dict]:
-        """Read enrollments using user-scoped endpoint /users/{userId}/enrollments."""
+        """Read enrollments using course-scoped endpoint /courses/{courseId}/enrollments."""
         max_records = int(table_options.get("max_records_per_batch", "200"))
 
         records = []
-        user_offset = 0
-        user_limit = 100
-        user_cursor = start_offset.get("user_cursor") if start_offset else None
-        last_user = None
+        course_page = 0
+        course_limit = 1000
+        last_course = None
 
         while len(records) < max_records:
-            user_params = {"_offset": str(user_offset), "_limit": str(user_limit)}
-            if user_cursor:
-                user_params["_filter"] = f"dateEdited ge datetime'{user_cursor}'"
-
-            resp = self._request_with_retry("GET", "/users", params=user_params)
+            course_params = {"_offset": str(course_page), "_limit": str(course_limit)}
+            resp = self._request_with_retry("GET", "/courses", params=course_params)
             if resp.status_code != 200:
-                raise RuntimeError(f"Failed to fetch users for enrollments: {resp.status_code} {resp.text}")
+                raise RuntimeError(f"Failed to fetch courses for enrollments: {resp.status_code} {resp.text}")
 
             data = resp.json()
-            users = data.get("users", [])
-            if not users:
+            courses = data.get("courses", [])
+            returned_items = data.get("returnedItems", len(courses))
+
+            if not courses:
                 break
 
-            for user in users:
-                user_id = user.get("id")
-                if not user_id:
+            for course in courses:
+                course_id = course.get("id")
+                if not course_id:
                     continue
-                last_user = user
+                last_course = course
 
-                enroll_resp = self._request_with_retry(
-                    "GET", f"/users/{user_id}/enrollments", params={"_limit": str(min(100, max_records))}
-                )
-                if enroll_resp.status_code != 200:
-                    continue
+                enroll_page = 0
+                enroll_limit = 1000
+                while len(records) < max_records:
+                    enroll_params = {"_offset": str(enroll_page), "_limit": str(enroll_limit)}
+                    enroll_resp = self._request_with_retry(
+                        "GET", f"/courses/{course_id}/enrollments", params=enroll_params
+                    )
+                    if enroll_resp.status_code != 200:
+                        break
 
-                enroll_data = enroll_resp.json()
-                enrollments = enroll_data.get("enrollments", [])
-                for enroll in enrollments:
-                    enroll["userId"] = user_id
-                    enroll["_userDateEdited"] = user.get("dateEdited")
-                    records.append(enroll)
+                    enroll_data = enroll_resp.json()
+                    enrollments = enroll_data.get("enrollments", [])
+                    enroll_returned = enroll_data.get("returnedItems", len(enrollments))
+
+                    for enroll in enrollments:
+                        enroll["courseId"] = course_id
+                        enroll["courseName"] = course.get("name")
+                        records.append(enroll)
+
+                    if enroll_returned == 0 or len(enrollments) < enroll_limit:
+                        break
+                    enroll_page += 1
 
                 if len(records) >= max_records:
                     break
 
-            returned = data.get("returnedItems", len(users))
-            if returned < user_limit:
+            if returned_items == 0 or len(courses) < course_limit:
                 break
-
-            user_offset += 1
+            course_page += 1
 
         if not records:
             return iter([]), start_offset or {}
 
-        end_offset = {"user_cursor": last_user.get("dateEdited")} if last_user else {}
+        end_offset = {"course_cursor": last_course.get("dateEdited")} if last_course else {}
 
         return iter(records), end_offset
 
@@ -240,19 +246,19 @@ class AbsorbLakeflowConnect(LakeflowConnect):
         self, table_name: str, table_options: dict[str, str]
     ) -> tuple[Iterator[dict], dict]:
         """Full-refresh read with pagination."""
+        country_id = table_options.get("country_id") if table_name == "provinces" else None
+        if table_name == "provinces" and not country_id:
+            return self._read_all_provinces()
+
         records = []
-        offset = 0
+        page = 0
         limit = 1000
 
         while True:
-            params: dict = {"_offset": str(offset), "_limit": str(limit)}
+            params: dict = {"_offset": str(page), "_limit": str(limit)}
 
-            if table_name == "provinces":
-                country_id = table_options.get("country_id")
-                if country_id:
-                    params["countryId"] = country_id
-                else:
-                    return self._read_all_provinces()
+            if table_name == "provinces" and country_id:
+                params["countryId"] = country_id
 
             resp = self._request_with_retry("GET", f"/{table_name}", params=params)
 
@@ -260,39 +266,37 @@ class AbsorbLakeflowConnect(LakeflowConnect):
                 raise RuntimeError(f"Failed to read {table_name}: {resp.status_code} {resp.text}")
 
             data = resp.json()
+            returned_items = data.get("returnedItems", 0)
 
-            if table_name in ("countries", "provinces"):
-                items_key = self._get_items_key(table_name)
-                if items_key and isinstance(data, dict):
-                    items = data.get(items_key, [])
-                else:
-                    items = data if isinstance(data, list) else []
+            if table_name == "provinces":
+                items = data if isinstance(data, list) else []
             else:
                 items_key = self._get_items_key(table_name)
                 items = data.get(items_key, []) if isinstance(data, dict) else []
 
             records.extend(items)
 
-            if len(items) < limit:
+            if returned_items == 0 or len(items) < limit:
                 break
 
-            offset += 1
+            page += 1
 
         return iter(records), {}
 
     def _read_all_provinces(self) -> tuple[Iterator[dict], dict]:
         """Read all provinces for all countries."""
         records = []
-        country_offset = 0
+        country_page = 0
         country_limit = 1000
 
         while True:
-            params = {"_offset": str(country_offset), "_limit": str(country_limit)}
+            params = {"_offset": str(country_page), "_limit": str(country_limit)}
             resp = self._request_with_retry("GET", "/countries", params=params)
             if resp.status_code != 200:
                 raise RuntimeError(f"Failed to fetch countries: {resp.status_code} {resp.text}")
 
             data = resp.json()
+            returned_items = data.get("returnedItems", 0)
             if isinstance(data, dict):
                 countries = data.get("countries", [])
             elif isinstance(data, list):
@@ -305,19 +309,23 @@ class AbsorbLakeflowConnect(LakeflowConnect):
 
             for country in countries:
                 country_id = country.get("id")
+                country_code = country.get("countryCode")
                 if not country_id:
                     continue
 
-                prov_offset = 0
+                prov_page = 0
                 while True:
-                    prov_params = {"_offset": str(prov_offset), "_limit": "1000", "countryId": country_id}
+                    prov_params = {"_offset": str(prov_page), "_limit": "1000", "countryId": country_id}
                     prov_resp = self._request_with_retry("GET", "/provinces", params=prov_params)
                     if prov_resp.status_code != 200:
                         break
 
                     prov_data = prov_resp.json()
+                    prov_returned = prov_data.get("returnedItems", 0) if isinstance(prov_data, dict) else 0
                     if isinstance(prov_data, list):
                         provinces = prov_data
+                    elif isinstance(prov_data, dict):
+                        provinces = prov_data.get("provinces", [])
                     else:
                         provinces = []
 
@@ -327,15 +335,16 @@ class AbsorbLakeflowConnect(LakeflowConnect):
                     for prov in provinces:
                         prov["countryId"] = country_id
                         prov["countryName"] = country.get("name")
+                        prov["countryCode"] = country_code
                         records.append(prov)
 
-                    if len(provinces) < 1000:
+                    if prov_returned == 0 or len(provinces) < 1000:
                         break
-                    prov_offset += 1
+                    prov_page += 1
 
-            if len(countries) < country_limit:
+            if returned_items == 0 or len(countries) < country_limit:
                 break
-            country_offset += 1
+            country_page += 1
 
         return iter(records), {}
 
@@ -356,10 +365,10 @@ class AbsorbLakeflowConnect(LakeflowConnect):
         limit = 1000
 
         records = []
-        offset = 0
+        page = 0
 
         while len(records) < max_records:
-            params: dict = {"_offset": str(offset), "_limit": str(limit)}
+            params: dict = {"_offset": str(page), "_limit": str(limit)}
 
             resp = self._request_with_retry("GET", f"/{table_name}", params=params)
 
@@ -367,15 +376,16 @@ class AbsorbLakeflowConnect(LakeflowConnect):
                 raise RuntimeError(f"Failed to read {table_name}: {resp.status_code} {resp.text}")
 
             data = resp.json()
+            returned_items = data.get("returnedItems", 0)
             items_key = self._get_items_key(table_name)
             items = data.get(items_key, []) if isinstance(data, dict) else []
 
             records.extend(items)
 
-            if len(items) < limit:
+            if returned_items == 0 or len(items) < limit:
                 break
 
-            offset += 1
+            page += 1
 
         if not records:
             return iter([]), start_offset or {}
