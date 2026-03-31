@@ -1,0 +1,56 @@
+# Medidata eTMF Community Connector Spec
+# This file defines the specification for the connector including
+# connection parameters and allowlist options.
+
+# ============================================================================
+# Connection Parameters
+# These are provided when creating the Unity Catalog connection.
+#
+# Medidata eTMF uses MAuth (Medidata Authentication) — a proprietary
+# request-signing protocol. All API requests are signed using an RSA private
+# key associated with a registered application UUID.
+# ============================================================================
+display_name: Medidata eTMF
+connection:
+  parameters:
+    - name: app_uuid
+      type: string
+      required: true
+      description: >
+        Application UUID registered in Medidata's MAuth system.
+        Identifies the calling application for request signing.
+        Format: UUID (e.g., '40b93548-b79f-4ac0-82ec-005d965e21b5').
+
+    - name: private_key
+      type: string
+      required: true
+      secret: true
+      description: >
+        RSA private key in PEM format used to sign MAuth requests.
+        This is the full PEM key content (not a file path).
+        The key is used by the mauth-client library to sign each
+        HTTP request sent to the Medidata API.
+
+    - name: client_division_scheme_uuid
+      type: string
+      required: true
+      description: >
+        Client division scheme UUID that identifies the organization/tenant
+        scope for API requests. Passed as a query parameter on every API call.
+        Format: UUID (e.g., '2bb466e6-e8bb-475f-b6a0-a25c89034052').
+
+    - name: base_url
+      type: string
+      required: false
+      description: >
+        Base URL for the Medidata API. Defaults to 'https://api.mdsol.com'.
+        Override only if using a non-standard Medidata environment.
+
+# ============================================================================
+# External Options Allowlist
+# These table-specific options must be included in the externalOptionsAllowList
+# parameter of the UC connection to allow them to be passed through.
+# Use a comma-separated string of option names.
+# If no table-specific options are needed, set to empty string or omit.
+# ============================================================================
+external_options_allowlist: "created_at_from,created_at_to"
