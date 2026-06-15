@@ -1,0 +1,52 @@
+# survey_sparrow Community Connector Spec
+# This file defines the specification for the connector including
+# connection parameters and allowlist options.
+
+# ============================================================================
+# Connection Parameters
+# These are provided when creating the Unity Catalog connection.
+# Single authentication method (Option A): Bearer token via Private App.
+# ============================================================================
+display_name: SurveySparrow
+connection:
+  parameters:
+    - name: access_token
+      type: string
+      required: true
+      secret: true
+      description: >
+        SurveySparrow Personal Access Token for API authentication.
+        Generate via Settings → Apps & Integrations → Private Apps → Create a Private App.
+        The token is shown only once — copy and store it securely.
+
+    - name: region
+      type: string
+      required: false
+      description: >
+        Data center region for your SurveySparrow account.
+        Determines the API base URL. Accepted values:
+          us    → https://api.surveysparrow.com/v3  (default)
+          eu    → https://eu-api.surveysparrow.com/v3
+          ap    → https://ap-api.surveysparrow.com/v3
+          me    → https://me-api.surveysparrow.com/v3
+          uk    → https://eu-ln-api.surveysparrow.com/v3
+          ap-sy → https://ap-sy-api.surveysparrow.com/v3
+          ca    → https://ca-api.surveysparrow.com/v3
+        Contact SurveySparrow support to confirm your region.
+        Defaults to 'us' if not specified.
+
+# ============================================================================
+# External Options Allowlist
+# These table-specific options must be included in the externalOptionsAllowList
+# parameter of the UC connection to allow them to be passed through.
+#
+# survey_id            - Restrict survey-partitioned tables (responses, questions,
+#                        channels, variables) to a single survey. If omitted, all
+#                        surveys are iterated automatically.
+# max_records_per_batch - Cap on records returned per microbatch for incremental
+#                        tables (surveys, responses, contacts, tickets, audit_logs).
+# window_seconds       - Width of the sliding time-window in seconds for CDC tables
+#                        (surveys, responses, contacts, tickets). Default: 3600.
+# limit                - API page size for audit_logs requests. Default: 100, max 500.
+# ============================================================================
+external_options_allowlist: "survey_id,max_records_per_batch,window_seconds,limit"
